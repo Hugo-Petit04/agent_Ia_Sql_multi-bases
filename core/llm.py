@@ -13,9 +13,9 @@ from rich.table import Table
 
 from core import traces
 
-# --- Configuration ----------------------------------------------------------
+### Configuration
 
-RACINE = Path(__file__).resolve().parent.parent      # le dossier code/
+RACINE = Path(__file__).resolve().parent.parent      
 load_dotenv(RACINE / ".env")                           # les variables déjà définies gardent la priorité
 
 BASE_URL = os.getenv("LLM_BASE_URL", "https://api.groq.com/openai/v1")
@@ -71,7 +71,7 @@ def client():
     return _client
 
 
-# --- Appel au modèle --------------------------------------------------------
+### Appel au modèle 
 
 def chat(messages, tools=None, agent="?", temperature=0.3):
     """
@@ -154,7 +154,7 @@ def _enregistrer_usage(reponse, agent, duree):
                   completion_tokens=entree["completion_tokens"])
 
 
-# --- Petites aides pour construire les messages -----------------------------
+### Aides construction messages
 
 def schema_outil(nom, description, proprietes, requis=None):
     """
@@ -204,7 +204,7 @@ def message_outil(appel, resultat):
     return {"role": "tool", "tool_call_id": appel.id, "name": appel.function.name, "content": resultat}
 
 
-# --- Coûts ------------------------------------------------------------------
+### Couts
 
 def resume_couts(prix_input_par_million=0.80, prix_output_par_million=4.00):
     """
@@ -238,10 +238,10 @@ def resume_couts(prix_input_par_million=0.80, prix_output_par_million=4.00):
     return total["cout"]
 
 
-# --- Messages d'erreur lisibles ----------------------------------------------
+### Messages d'erreur lisibles 
 
 def _afficher_erreur(type_erreur, erreur, pile):
-    """Remplace la longue pile d'erreur Python par un message clair pour nos erreurs."""
+    """Remplace la pile d'erreur Python par un message clair des erreurs."""
     if isinstance(erreur, ErreurLLM):
         traces.console.print(f"\n[bold red]Problème avec le LLM :[/] {escape(str(erreur))}")
     elif isinstance(erreur, NotImplementedError):

@@ -71,7 +71,7 @@ def tracer(agent, type_evenement, texte, **details):
         })
 
 
-# --- Raccourcis pour les événements les plus fréquents -----------------------
+### Raccourcis événements fréquents 
 
 def pensee(agent, texte):
     tracer(agent, "PENSÉE", texte)
