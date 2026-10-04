@@ -5,11 +5,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # pour importer
 from core.agent import Agent
 from core.llm import schema_outil
 
+ACTIONS_EN_ATTENTE = []
+
 ### OUTILS 
 
 def chercher_base_donnée(sujet):
     """Transforme le texte en une requête SQL pour interroger la base de données. À remplacer par la vraie fonction."""
     return f"SELECT * FROM articles WHERE sujet = '{sujet}';"
+
+def executer_action(description):
+    """Appelée par l'interface quand l'humain clique sur Valider. À remplacer par la vraie action."""
+    return f"Action exécutée (simulation) : {description}"
 
 SCHEMA_BASE_DONNÉES = schema_outil(
     "chercher_base_donnée", "Transforme le texte en une requête SQL pour interroger la base de données.",
