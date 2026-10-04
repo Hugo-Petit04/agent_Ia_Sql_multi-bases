@@ -1,0 +1,60 @@
+[
+    {
+        "database": "database/countries.db",
+        "table": "countries",
+        "columns": [
+            {
+                "name": "id",
+                "type": "INTEGER"
+            },
+            {
+                "name": "country",
+                "type": "TEXT"
+            },
+            {
+                "name": "continent",
+                "type": "TEXT"
+            }
+        ]
+    },
+    {
+        "database": "database/economy.db",
+        "table": "economy",
+        "columns": [
+            {
+                "name": "id",
+                "type": "INTEGER"
+            },
+            {
+                "name": "country_id",
+                "type": "INTEGER"
+            },
+            {
+                "name": "population",
+                "type": "INTEGER"
+            },
+            {
+                "name": "pib",
+                "type": "REAL"
+            }
+        ]
+    },
+    {
+        "database": "database/health.db",
+        "table": "health",
+        "columns": [
+            {
+                "name": "id",
+                "type": "INTEGER"
+            },
+            {
+                "name": "country_id",
+                "type": "INTEGER"
+            },
+            {
+                "name": "life_expectancy",
+                "type": "REAL"
+            }
+        ]
+    }
+]

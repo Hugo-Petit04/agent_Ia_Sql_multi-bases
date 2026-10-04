@@ -24,7 +24,7 @@ MODELE = os.getenv("LLM_MODEL", "qwen/qwen3.8-27b")
 
 FICHIER_TRACES = RACINE / "traces.jsonl"
 JOURNAL = []                                 # un dictionnaire par appel au modèle
-ATTENTES_429 = [2, 5, 10, 20]                # secondes d'attente entre les essais si 429
+ATTENTES_429 = [20, 10, 5, 2]                # secondes d'attente entre les essais si 429
 
 # Identifiant de la "demande utilisateur" en cours (pour calculer un coût par demande)
 demande_en_cours = uuid.uuid4().hex[:8]

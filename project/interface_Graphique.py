@@ -60,7 +60,7 @@ traces.definir_ecouteur(ecouteur)
 ### Zone centrale 
 
 st.title("Prototype multi-agent")
-st.caption(f"Modèle : {llm.MODELE} — fournisseur : {llm.BASE_URL}")
+st.caption(f"Modèle : {llm.MODELE}")
 probleme = llm.verifier_configuration()
 if probleme:
     st.error(probleme)
