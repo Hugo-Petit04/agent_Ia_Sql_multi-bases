@@ -1,6 +1,7 @@
 import sys
+import re
 from pathlib import Path
-
+import sqlparse
 import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # pour importer common/
@@ -15,7 +16,7 @@ ETIQUETTES = {"DEMANDE": "demande", "PENSÉE": "pensée", "ACTION": "action", "O
 st.set_page_config(page_title="Prototype multi-agent", layout="wide")
 etat = st.session_state
 for cle, valeur in {"traces": [], "tokens_in": 0, "tokens_out": 0, "couleurs": {},
-                    "resultat": None, "action": None, "message_action": None}.items():
+                    "resultat": None, "requete_sql": None, "action": None, "message_action": None}.items():
     etat.setdefault(cle, valeur)
 
 
@@ -36,10 +37,15 @@ def afficher_trace(evt):
     zone_traces.markdown(f"`{evt['heure']}` :{couleur}[**{evt['agent']}**] "
                          f"· *{ETIQUETTES.get(evt['type'], evt['type'])}* — {texte}")
 
+def formater_sql(requete):
+    return sqlparse.format(requete, reindent=True, keyword_case="upper")
 
 def ecouteur(evt):
     """Appelée par common/traces.py à CHAQUE événement : c'est ce qui rend le panneau 'en direct'."""
     etat.traces.append(evt)
+    if evt["type"] == "ACTION" and evt.get("outil") == "executer_requete_sql":
+        # La dernière requête est celle dont le résultat est résumé dans la réponse.
+        etat.requete_sql = evt.get("arguments", {}).get("requete")
     if evt["type"] == "LLM":
         etat.tokens_in += evt.get("prompt_tokens", 0)
         etat.tokens_out += evt.get("completion_tokens", 0)
@@ -59,7 +65,7 @@ traces.definir_ecouteur(ecouteur)
 
 ### Zone centrale 
 
-st.title("Prototype multi-agent")
+st.title("SQL Agent")
 st.caption(f"Modèle : {llm.MODELE}")
 probleme = llm.verifier_configuration()
 if probleme:
@@ -69,7 +75,7 @@ demande = st.text_area("Votre demande en langage naturel")
 if st.button("Lancer les agents", type="primary", disabled=bool(probleme)) and demande.strip():
     llm.nouvelle_demande()
     ACTIONS_EN_ATTENTE.clear()
-    etat.resultat, etat.action, etat.message_action = None, None, None
+    etat.resultat, etat.requete_sql, etat.action, etat.message_action = None, None, None, None
     with st.spinner("Les agents travaillent... (suivez-les dans le panneau de gauche)"):
         try:
             etat.resultat = creer_superviseur().run(demande)
@@ -77,6 +83,10 @@ if st.button("Lancer les agents", type="primary", disabled=bool(probleme)) and d
             st.error(str(erreur))
     if ACTIONS_EN_ATTENTE:
         etat.action = ACTIONS_EN_ATTENTE[-1]
+
+if etat.requete_sql:
+    st.subheader("Requête SQL exécutée")
+    st.code(formater_sql(etat.requete_sql), language="sql")
 
 if etat.resultat:
     st.subheader("Réponse")
