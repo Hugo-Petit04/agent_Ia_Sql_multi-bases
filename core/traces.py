@@ -79,7 +79,8 @@ def pensee(agent, texte):
 
 def action(agent, nom_outil, arguments):
     args = ", ".join(f"{cle}={valeur!r}" for cle, valeur in arguments.items())
-    tracer(agent, "ACTION", f"{nom_outil}({args})", outil=nom_outil)
+    tracer(agent, "ACTION", f"{nom_outil}({args})", outil=nom_outil,
+           arguments=arguments)
 
 
 def observation(agent, resultat):
