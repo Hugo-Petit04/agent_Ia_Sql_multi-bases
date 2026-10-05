@@ -29,14 +29,14 @@ Groq permet d'utiliser un modèle de langage en ligne gratuitement, sans install
 
 ```bash
 # Windows (PowerShell)
-git clone https://github.com/Hugo-Petit04/agents_ia
+git clone https://github.com/Hugo-Petit04/agent_Ia_Sql_multi-bases
 cd agents_ia
 uv sync
 copy .env.groq .env
 ```
 ```bash
 # macOS / Linux
-git clone https://github.com/Hugo-Petit04/agents_ia
+git clone https://github.com/Hugo-Petit04/agent_Ia_Sql_multi-bases
 cd agents_ia
 uv sync
 cp .env.groq .env
@@ -51,7 +51,7 @@ Téléchargez Ollama depuis [ollama.com](https://ollama.com/), puis récupérez 
 ```bash
 # Windows (PowerShell)
 ollama pull qwen3.5:4b
-git clone https://github.com/Hugo-Petit04/agents_ia
+git clone https://github.com/Hugo-Petit04/agent_Ia_Sql_multi-bases
 cd agents_ia
 uv sync
 copy .env.ollama .env
@@ -59,7 +59,7 @@ copy .env.ollama .env
 ```bash
 # macOS / Linux
 ollama pull qwen3.5:4b
-git clone https://github.com/Hugo-Petit04/agents_ia
+git clone https://github.com/Hugo-Petit04/agent_Ia_Sql_multi-bases
 cd agents_ia
 uv sync
 cp .env.ollama .env
