@@ -1,6 +1,11 @@
 import sys
 import re
+import csv
+import io
+import json
 from pathlib import Path
+from datetime import datetime
+
 import sqlparse
 import streamlit as st
 
@@ -16,7 +21,8 @@ ETIQUETTES = {"DEMANDE": "demande", "PENSÉE": "pensée", "ACTION": "action", "O
 st.set_page_config(page_title="Prototype multi-agent", layout="wide")
 etat = st.session_state
 for cle, valeur in {"traces": [], "tokens_in": 0, "tokens_out": 0, "couleurs": {},
-                    "resultat": None, "requete_sql": None, "action": None, "message_action": None}.items():
+                    "resultat": None, "requete_sql": None, "resultat_sql": None,
+                    "action": None, "message_action": None}.items():
     etat.setdefault(cle, valeur)
 
 
@@ -40,12 +46,37 @@ def afficher_trace(evt):
 def formater_sql(requete):
     return sqlparse.format(requete, reindent=True, keyword_case="upper")
 
+
+def lire_resultat_sql(texte):
+    """Extrait les colonnes et lignes renvoyées par l'outil SQL."""
+    try:
+        resultat = json.loads(texte)
+    except json.JSONDecodeError:
+        return None
+
+    if not isinstance(resultat, dict):
+        return None
+    if not isinstance(resultat.get("colonnes"), list) or not isinstance(resultat.get("lignes"), list):
+        return None
+    return resultat
+
+
+def creer_csv_resultat(resultat_sql):
+    sortie = io.StringIO(newline="")
+    ecrivain = csv.writer(sortie)
+    ecrivain.writerow(resultat_sql["colonnes"])
+    ecrivain.writerows(resultat_sql["lignes"])
+    return sortie.getvalue().encode("utf-8-sig")
+
+
 def ecouteur(evt):
     """Appelée par common/traces.py à CHAQUE événement : c'est ce qui rend le panneau 'en direct'."""
     etat.traces.append(evt)
     if evt["type"] == "ACTION" and evt.get("outil") == "executer_requete_sql":
         # La dernière requête est celle dont le résultat est résumé dans la réponse.
         etat.requete_sql = evt.get("arguments", {}).get("requete")
+    if evt["type"] == "OBSERVATION" and evt.get("outil") == "executer_requete_sql":
+        etat.resultat_sql = lire_resultat_sql(evt["texte"])
     if evt["type"] == "LLM":
         etat.tokens_in += evt.get("prompt_tokens", 0)
         etat.tokens_out += evt.get("completion_tokens", 0)
@@ -75,7 +106,8 @@ demande = st.text_area("Votre demande en langage naturel")
 if st.button("Lancer les agents", type="primary", disabled=bool(probleme)) and demande.strip():
     llm.nouvelle_demande()
     ACTIONS_EN_ATTENTE.clear()
-    etat.resultat, etat.requete_sql, etat.action, etat.message_action = None, None, None, None
+    etat.resultat, etat.requete_sql, etat.resultat_sql = None, None, None
+    etat.action, etat.message_action = None, None
     with st.spinner("Les agents travaillent... (suivez-les dans le panneau de gauche)"):
         try:
             etat.resultat = creer_superviseur().run(demande)
@@ -91,6 +123,18 @@ if etat.requete_sql:
 if etat.resultat:
     st.subheader("Réponse")
     st.markdown(etat.resultat)
+
+if etat.requete_sql and etat.resultat_sql is not None:
+    st.subheader("Télécharger le résultat de la dernière requête")
+    date_str = datetime.now().strftime("%Y-%m-%d_%Hh%M")
+
+    st.download_button(
+        "Télécharger le CSV",
+        data=creer_csv_resultat(etat.resultat_sql),
+        file_name=f"requete_sql_{date_str}.csv",
+        mime="text/csv",
+        type="primary",
+    )
 
 ### Human-in-the-loop
 if etat.action:

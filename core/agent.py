@@ -65,7 +65,7 @@ class Agent:
 
         if not isinstance(resultat, str):
             resultat = json.dumps(resultat, ensure_ascii=False)
-        traces.observation(self.nom, resultat)
+        traces.observation(self.nom, resultat, outil=nom_outil)
         return resultat
 
     def comme_outil(self, nom_outil, description):

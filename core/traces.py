@@ -83,10 +83,10 @@ def action(agent, nom_outil, arguments):
            arguments=arguments)
 
 
-def observation(agent, resultat):
+def observation(agent, resultat, outil=None):
     if not isinstance(resultat, str):
         resultat = json.dumps(resultat, ensure_ascii=False)
-    tracer(agent, "OBSERVATION", resultat)
+    tracer(agent, "OBSERVATION", resultat, outil=outil)
 
 
 def reponse(agent, texte):
