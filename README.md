@@ -67,7 +67,7 @@ cp .env.ollama .env
 
 ## 3 Lancer l'agent
 
-Ollama doit être lancé
+Ollama doit être lancé si on a choissi cette option
 
 ```bash
 uv run streamlit run project/interface_Graphique.py
