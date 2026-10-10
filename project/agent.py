@@ -136,7 +136,10 @@ agent_sql = Agent(
         "JOIN economy_db.economy e ON c.id = e.country_id "
         "WHERE e.pib > 3000000;\n\n"
 
-        "Après l'exécution, résume les résultats sans rien inventer."
+        "Après l'exécution, présente les résultats sans rien inventer : "
+        "une phrase d'introduction, puis un tableau Markdown, puis une courte explication en français. "
+        "N'écris JAMAIS la requête SQL dans ta réponse (ni en bloc de code, ni en texte brut, "
+        "ni après « Requête utilisée »). Elle est déjà affichée séparément à l'utilisateur."
     ),
     outils=[
         (executer_requete_sql, SCHEMA_EXECUTER_REQUETE),
