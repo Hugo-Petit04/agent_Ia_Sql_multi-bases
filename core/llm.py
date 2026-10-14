@@ -46,7 +46,7 @@ def verifier_configuration():
     en_local = "localhost" in BASE_URL or "127.0.0.1" in BASE_URL
     if not en_local and (not API_KEY or "collez-votre-cle" in API_KEY):
         return ("Aucune clé API trouvée.\n"
-                "  1. Copiez le fichier .env.example en .env (dans le dossier code/)\n"
+                "  1. Copiez le fichier .env.groq en .env (à la racine du projet)\n"
                 "  2. Collez votre clé dans LLM_API_KEY=...\n"
                 "  (Groq : https://console.groq.com/keys)")
     return None
@@ -101,31 +101,40 @@ def chat(messages, tools=None, agent="?", temperature=0.3):
             attente = ATTENTES_429[essai]
             traces.tracer(agent, "INFO", f"Erreur 429 (trop de requêtes) : nouvelle tentative dans {attente} s...")
             time.sleep(attente)
-        except openai.AuthenticationError:
-            raise ErreurLLM("Clé API refusée (erreur 401).\n"
-                            "  Vérifiez LLM_API_KEY dans le fichier .env (pas d'espace, pas de guillemets)\n"
-                            "  et que la clé correspond bien au fournisseur de LLM_BASE_URL.") from None
-        except openai.PermissionDeniedError:
-            raise ErreurLLM("Accès refusé (erreur 403) : votre compte n'a pas accès à ce modèle\n"
-                            f"  ({MODELE}). Vérifiez LLM_MODEL ou les droits de votre plan.") from None
-        except openai.NotFoundError:
-            raise ErreurLLM(f"Modèle ou adresse introuvable (erreur 404) : modèle '{MODELE}' sur {BASE_URL}.\n"
-                            "  Vérifiez LLM_MODEL et LLM_BASE_URL. Avec Ollama : ollama pull <modèle>.") from None
-        except openai.APIConnectionError:
-            raise ErreurLLM(f"Impossible de joindre {BASE_URL}.\n"
-                            "  Vérifiez votre connexion internet (ou, avec Ollama, que 'ollama serve' tourne).") from None
         except openai.BadRequestError as e:
             # Groq refuse lui-même un appel d'outil invalide (nom d'outil inventé...) : on redemande
             if "tool_use_failed" in str(e) and essai < len(ATTENTES_429):
                 traces.tracer(agent, "INFO", "Appel d'outil invalide refusé par le fournisseur : nouvelle tentative...")
                 continue
-            raise ErreurLLM(f"Requête refusée par le fournisseur (erreur 400) :\n  {e}\n"
-                            "  Si le message parle de 'tools' : ce modèle ne sait pas appeler d'outils,\n"
-                            "  choisissez-en un autre dans le .env.") from None
+            raise erreur_lisible(e) from None
+        except openai.OpenAIError as e:
+            raise erreur_lisible(e) from None
 
     duree = time.time() - debut
     _enregistrer_usage(reponse, agent, duree)
     return reponse.choices[0].message
+
+
+def erreur_lisible(erreur):
+    """Traduit une erreur de la bibliothèque openai en ErreurLLM avec un message clair."""
+    if isinstance(erreur, openai.AuthenticationError):
+        return ErreurLLM("Clé API refusée (erreur 401).\n"
+                         "  Vérifiez LLM_API_KEY dans le fichier .env (pas d'espace, pas de guillemets)\n"
+                         "  et que la clé correspond bien au fournisseur de LLM_BASE_URL.")
+    if isinstance(erreur, openai.PermissionDeniedError):
+        return ErreurLLM("Accès refusé (erreur 403) : votre compte n'a pas accès à ce modèle\n"
+                         f"  ({MODELE}). Vérifiez LLM_MODEL ou les droits de votre plan.")
+    if isinstance(erreur, openai.NotFoundError):
+        return ErreurLLM(f"Modèle ou adresse introuvable (erreur 404) : modèle '{MODELE}' sur {BASE_URL}.\n"
+                         "  Vérifiez LLM_MODEL et LLM_BASE_URL. Avec Ollama : ollama pull <modèle>.")
+    if isinstance(erreur, openai.APIConnectionError):   # inclut APITimeoutError
+        return ErreurLLM(f"Impossible de joindre {BASE_URL}.\n"
+                         "  Vérifiez votre connexion internet (ou, avec Ollama, que 'ollama serve' tourne).")
+    if isinstance(erreur, openai.BadRequestError):
+        return ErreurLLM(f"Requête refusée par le fournisseur (erreur 400) :\n  {erreur}\n"
+                         "  Si le message parle de 'tools' : ce modèle ne sait pas appeler d'outils,\n"
+                         "  choisissez-en un autre dans le .env.")
+    return ErreurLLM(f"L'appel au modèle a échoué : {erreur}")
 
 
 def _enregistrer_usage(reponse, agent, duree):

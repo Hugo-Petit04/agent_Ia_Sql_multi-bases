@@ -1,7 +1,6 @@
 import json
-import sys
-
 import sqlite3
+import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # pour importer core/
@@ -11,9 +10,13 @@ from core.llm import schema_outil
 SCHEMA_PATH = Path(__file__).resolve().parent.parent / "schema.json"
 DATABASE_DIR = Path(__file__).resolve().parent.parent / "database"
 
-DB_COUNTRIES = DATABASE_DIR / "countries.db"
-DB_ECONOMY = DATABASE_DIR / "economy.db"
-DB_HEALTH = DATABASE_DIR / "health.db"
+# alias utilisé dans les requêtes -> fichier de la base
+BASES = {
+    "countries_db": DATABASE_DIR / "countries.db",
+    "economy_db": DATABASE_DIR / "economy.db",
+    "health_db": DATABASE_DIR / "health.db",
+}
+MAX_LIGNES = 50
 
 ACTIONS_EN_ATTENTE = []
 
@@ -30,41 +33,45 @@ def chercher_schema(table=""):
         return f"schema.json invalide : {e}"
 
     if table:
-        schema = [t for t in schema if t["table"].lower() == table.lower()]
+        nom = table.lower().split(".")[-1]  # accepte "health" comme "health_db.health"
+        schema = [t for t in schema if t["table"].lower() == nom]
         if not schema:
             return f"Table inconnue : {table}"
 
-    # Format compact, plus facile à lire pour le LLM que le JSON brut
+    # Format compact, plus facile à lire pour le LLM que le JSON brut.
+    # Préfixé par l'alias de la base (ex. countries_db.countries), comme dans les requêtes.
     return "\n".join(
-        f"{t['table']}: " + ", ".join(f"{c['name']} ({c['type']})" for c in t["columns"])
+        f"{Path(t['database']).stem}_db.{t['table']}: "
+        + ", ".join(f"{c['name']} ({c['type']})" for c in t["columns"])
         for t in schema
     )
 
 
 def executer_requete_sql(requete):
-    """Exécute une requête SELECT sur les trois bases."""
+    """Exécute une requête SELECT sur les trois bases (ouvertes en lecture seule)."""
+    r = requete.strip().rstrip(";").strip()
 
-    r = requete.strip().rstrip(";")
-
-    if not r.lower().startswith("select"):
+    if not r.lower().startswith(("select", "with")):
         return "Erreur : seules les requêtes SELECT sont autorisées."
 
-    connection = sqlite3.connect(":memory:")
-
+    # uri=True permet d'attacher les bases avec mode=ro : aucune écriture possible,
+    # même si la requête contient autre chose qu'un simple SELECT.
+    connection = sqlite3.connect(":memory:", uri=True)
     try:
-        connection.execute("ATTACH DATABASE ? AS countries_db", (str(DB_COUNTRIES),))
-        connection.execute("ATTACH DATABASE ? AS economy_db", (str(DB_ECONOMY),))
-        connection.execute("ATTACH DATABASE ? AS health_db", (str(DB_HEALTH),))
+        for alias, fichier in BASES.items():
+            connection.execute(f"ATTACH DATABASE ? AS {alias}", (f"{fichier.as_uri()}?mode=ro",))
 
         cursor = connection.execute(r)
+        if cursor.description is None:
+            return "Erreur : la requête ne renvoie aucune colonne (seules les requêtes SELECT sont autorisées)."
 
-        columns = [description[0] for description in cursor.description]
-        rows = cursor.fetchmany(50)
-
-        return {
-            "colonnes": columns,
-            "lignes": rows
-        }
+        colonnes = [description[0] for description in cursor.description]
+        lignes = cursor.fetchmany(MAX_LIGNES + 1)
+        resultat = {"colonnes": colonnes, "lignes": lignes[:MAX_LIGNES]}
+        if len(lignes) > MAX_LIGNES:
+            resultat["avertissement"] = (f"Résultat tronqué aux {MAX_LIGNES} premières lignes : "
+                                         "utilise LIMIT, une agrégation ou un filtre plus précis.")
+        return resultat
 
     except sqlite3.Error as e:
         return f"Erreur SQL : {e}"
@@ -114,43 +121,13 @@ INSTRUCTIONS_SQL = (
 
     "Après l'exécution, résume les résultats brièvement, sans rien inventer."
 )
+
+
 ### AGENTS
 
 agent_sql = Agent(
     nom="Agent sql",
-    instructions=(
-        "Tu reçois une question et un schéma. "
-        "Écris une requête SELECT puis exécute-la avec l'outil. "
-        "Corrige la requête en cas d'erreur. "
-        "Ne dis jamais qu'une table n'existe pas avant d'avoir exécuté "
-        "la requête avec l'outil.\n\n"
-
-        "IMPORTANT : trois bases SQLite sont disponibles :\n"
-        "- countries_db : table countries "
-        "(id, country, continent)\n"
-        "- economy_db : table economy "
-        "(id, country_id, population, pib)\n"
-        "- health_db : table health "
-        "(id, country_id, life_expectancy)\n\n"
-
-        "Pour accéder aux tables, utilise toujours leur nom avec "
-        "le nom de la base :\n"
-        "countries_db.countries\n"
-        "economy_db.economy\n"
-        "health_db.health\n\n"
-
-        "Pour joindre les tables, utilise country_id :\n"
-        "countries.id = economy.country_id\n"
-        "countries.id = health.country_id\n\n"
-
-        "Exemple :\n"
-        "SELECT c.country, e.pib "
-        "FROM countries_db.countries c "
-        "JOIN economy_db.economy e ON c.id = e.country_id "
-        "WHERE e.pib > 3000000;\n\n"
-
-        "Après l'exécution, résume les résultats sans rien inventer."
-    ),
+    instructions="Tu reçois une question et un schéma. " + INSTRUCTIONS_SQL,
     outils=[
         (executer_requete_sql, SCHEMA_EXECUTER_REQUETE),
     ],
