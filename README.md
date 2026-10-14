@@ -70,5 +70,5 @@ cp .env.ollama .env
 Ollama doit être lancé si on a choissi cette option
 
 ```bash
-uv run streamlit run project/interface_Graphique.py
+uv run streamlit run project/interface_client.py
 ```
