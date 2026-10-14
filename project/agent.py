@@ -1,170 +1,164 @@
 import json
 import sys
-import re 
-import sqlite3
+import time
 from pathlib import Path
+from types import SimpleNamespace
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # pour importer core/
-from core.agent import Agent
-from core.llm import schema_outil
+import openai
+import streamlit as st
 
-SCHEMA_PATH = Path(__file__).resolve().parent.parent / "schema.json"
-DATABASE_DIR = Path(__file__).resolve().parent.parent / "database"
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # pour importer core/
+from core import llm, traces
+from core.llm import chat, lire_arguments, message_assistant, message_outil
+from outils import INSTRUCTIONS_SQL, SCHEMA_EXECUTER_REQUETE, executer_requete_sql
 
-DB_COUNTRIES = DATABASE_DIR / "countries.db"
-DB_ECONOMY = DATABASE_DIR / "economy.db"
-DB_HEALTH = DATABASE_DIR / "health.db"
+AGENT = "Superviseur"
+MAX_ITERATIONS = 8
 
-ACTIONS_EN_ATTENTE = []
+PROMPT_SYSTEME = INSTRUCTIONS_SQL
 
-### OUTILS 
+EXCUSE = "Désolé, je n'ai pas pu terminer : trop d'étapes nécessaires."
 
-def chercher_schema(table=""):
-    """Renvoie le schéma (tables, colonnes, types) lu dans schema.json.
-    Si `table` est donné, ne renvoie que cette table."""
-    try:
-        schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return f"schema.json introuvable : {SCHEMA_PATH}"
-    except json.JSONDecodeError as e:
-        return f"schema.json invalide : {e}"
 
-    if table:
-        schema = [t for t in schema if t["table"].lower() == table.lower()]
-        if not schema:
-            return f"Table inconnue : {table}"
+def a_completer(texte):
+    """Le message jaune des autres labos, version page web."""
+    st.warning(f"**À compléter :** {texte}")
+    st.stop()
 
-    # Format compact, plus facile à lire pour le LLM que le JSON brut
-    return "\n".join(
-        f"{t['table']}: " + ", ".join(f"{c['name']} ({c['type']})" for c in t["columns"])
-        for t in schema
-    )
 
-def executer_requete_sql(requete):
-    """Exécute une requête SELECT sur les trois bases."""
+def _messages(conversation, prompt):
+    """Le prompt système + ce que la page a gardé (on ne garde que le rôle et le texte)."""
+    return [{"role": "system", "content": prompt or PROMPT_SYSTEME}] + [
+        {"role": m["role"], "content": m["content"]} for m in conversation]
 
-    r = requete.strip().rstrip(";")
 
-    if not r.lower().startswith("select"):
-        return "Erreur : seules les requêtes SELECT sont autorisées."
+def _outils(outils, outils_en_plus):
+    """Des couples (fonction, schéma). outils=None : les outils du superviseur (les sous-agents)."""
+    if outils is None:
+        outils = [(executer_requete_sql, SCHEMA_EXECUTER_REQUETE)]
+    outils = list(outils) + list(outils_en_plus)
+    return [schema for _, schema in outils], {schema["function"]["name"]: fonction for fonction, schema in outils}
 
-    connection = sqlite3.connect(":memory:")
 
-    try:
-        connection.execute(
-            "ATTACH DATABASE ? AS countries_db",
-            (str(DB_COUNTRIES),)
-        )
+def _executer(nom, arguments, fonctions):
+    """Exécute un outil et rend son résultat en texte, en laissant les traces [ACTION] et [OBSERVATION]."""
+    traces.action(AGENT, nom, arguments)
+    if nom not in fonctions:
+        resultat = f"Erreur : l'outil '{nom}' n'existe pas. Outils disponibles : {list(fonctions)}"
+    else:
+        try:
+            resultat = fonctions[nom](**arguments)
+        except Exception as erreur:  # mauvais arguments, panne de l'outil : on prévient le modèle au lieu de planter
+            resultat = f"Erreur pendant l'exécution de {nom} : {erreur}"
+    if not isinstance(resultat, str):
+        resultat = json.dumps(resultat, ensure_ascii=False)
+    traces.observation(AGENT, resultat)
+    return resultat
 
-        connection.execute(
-            "ATTACH DATABASE ? AS economy_db",
-            (str(DB_ECONOMY),)
-        )
 
-        connection.execute(
-            "ATTACH DATABASE ? AS health_db",
-            (str(DB_HEALTH),)
-        )
+def repondre(conversation, outils_en_plus=(), prompt=None, outils=None):
+    """La boucle ReAct : rend la réponse finale quand elle est entièrement écrite."""
+    messages = _messages(conversation, prompt)
+    schemas, fonctions = _outils(outils, outils_en_plus)
+    for _ in range(MAX_ITERATIONS):
+        reponse = chat(messages, tools=schemas or None, agent=AGENT)
+        if not reponse.tool_calls:
+            return reponse.content or ""
+        messages.append(message_assistant(reponse))
+        for appel in reponse.tool_calls:
+            resultat = _executer(appel.function.name, lire_arguments(appel), fonctions)
+            messages.append(message_outil(appel, resultat))
+    return EXCUSE
 
-        cursor = connection.execute(r)
 
-        columns = [description[0] for description in cursor.description]
-        rows = cursor.fetchmany(50)
+def repondre_en_direct(conversation, outils_en_plus=(), prompt=None, outils=None):
+    """
+    La même boucle, avec stream=True : un générateur qui rend le texte morceau par morceau.
+    Si le fournisseur répond 429, on attend et on réessaie (comme llm.chat), tant qu'aucun texte n'a été affiché.
+    """
+    messages = _messages(conversation, prompt)
+    schemas, fonctions = _outils(outils, outils_en_plus)
+    for _ in range(MAX_ITERATIONS):
+        for essai in range(len(llm.ATTENTES_429) + 1):
+            debut = time.time()
+            texte, appels, usage = "", {}, None      # on repart de zéro à chaque essai
+            try:
+                flux = llm.client().chat.completions.create(
+                    model=llm.MODELE, messages=messages, tools=schemas or openai.NOT_GIVEN,
+                    temperature=0.3, stream=True)
+                for bloc in flux:
+                    usage = _usage(bloc) or usage
+                    if not bloc.choices:
+                        continue
+                    delta = bloc.choices[0].delta
+                    if delta.content:
+                        texte += delta.content
+                        yield delta.content
+                    for morceau in delta.tool_calls or []:
+                        appel = appels.setdefault(morceau.index, {"id": "", "nom": "", "arguments": ""})
+                        appel["id"] = morceau.id or appel["id"]
+                        appel["nom"] += morceau.function.name or ""
+                        appel["arguments"] += morceau.function.arguments or ""
+                break                                 # appel réussi : on sort de la boucle d'essais
+            except openai.RateLimitError:
+                # si du texte est déjà affiché, réessayer le dupliquerait : on abandonne
+                if texte or essai == len(llm.ATTENTES_429):
+                    raise llm.ErreurLLM("Limite de débit (erreur 429) toujours atteinte après plusieurs essais. "
+                                        "Attendez une minute avant de reposer la question.") from None
+                attente = llm.ATTENTES_429[essai]
+                traces.tracer(AGENT, "INFO", f"Erreur 429 (trop de requêtes) : nouvelle tentative dans {attente} s...")
+                time.sleep(attente)
+            except openai.OpenAIError as erreur:
+                raise llm.ErreurLLM(f"L'appel au modèle a échoué : {erreur}") from None
 
-        return {
-            "colonnes": columns,
-            "lignes": rows
-        }
+        if usage:
+            llm._enregistrer_usage(SimpleNamespace(usage=usage), AGENT, time.time() - debut)
+        if not appels:
+            return
+        messages.append({"role": "assistant", "content": texte, "tool_calls": [
+            {"id": a["id"], "type": "function", "function": {"name": a["nom"], "arguments": a["arguments"]}}
+            for a in appels.values()]})
+        for a in appels.values():
+            try:
+                arguments = json.loads(a["arguments"] or "{}")
+            except json.JSONDecodeError:
+                arguments = {}
+            resultat = _executer(a["nom"], arguments if isinstance(arguments, dict) else {}, fonctions)
+            messages.append({"role": "tool", "tool_call_id": a["id"], "name": a["nom"], "content": resultat})
+    yield EXCUSE
 
-    except sqlite3.Error as e:
-        return f"Erreur SQL : {e}"
+def _usage(bloc):
+    """Les tokens d'un appel en streaming, s'ils sont dans ce bloc (champ usage, ou x_groq chez Groq)."""
+    brut = getattr(bloc, "usage", None)
+    if brut is None:
+        brut = ((getattr(bloc, "model_extra", None) or {}).get("x_groq") or {}).get("usage")
+    if brut is None:
+        return None
+    lire = brut.get if isinstance(brut, dict) else lambda cle, defaut=0: getattr(brut, cle, defaut)
+    return SimpleNamespace(prompt_tokens=lire("prompt_tokens", 0) or 0,
+                           completion_tokens=lire("completion_tokens", 0) or 0)
 
-    finally:
-        connection.close()
 
-def proposer_action(description):
-    """Met une action en attente de validation humaine. N'exécute rien."""
-    ACTIONS_EN_ATTENTE.append(description)
-    return f"Action mise en attente de validation : {description}"
+class Chrono:
+    """Mesure ce que l'utilisateur ressent : le temps avant le premier mot, et le temps total."""
 
-def executer_action(description):
-    """Appelée par l'interface quand l'humain clique sur Valider."""
-    return f"Action exécutée (simulation) : {description}"
+    def __init__(self):
+        self.debut = time.time()
+        self.premier_mot = None
+        self.total = None
 
-SCHEMA_CHERCHER_SCHEMA = schema_outil(
-    "chercher_schema",
-    "Renvoie les tables, colonnes et types de la base. Laisser vide pour tout voir.",
-    {"table": {"type": "string", "description": "Nom de la table (optionnel)"}})
+    def suivre(self, generateur):
+        """Laisse passer les morceaux d'un générateur en notant quand arrive le premier."""
+        for morceau in generateur:
+            if self.premier_mot is None:
+                self.premier_mot = time.time() - self.debut
+            yield morceau
+        self.fin()
 
-SCHEMA_EXECUTER_REQUETE = schema_outil(
-    "executer_requete_sql",
-    "Exécute une requête SQL SELECT et renvoie les lignes. Erreur renvoyée si la requête est invalide.",
-    {"requete": {"type": "string", "description": "Requête SELECT SQLite"}})
+    def fin(self):
+        self.total = time.time() - self.debut
+        if self.premier_mot is None:      # réponse arrivée d'un seul coup
+            self.premier_mot = self.total
 
-### AGENTS
-
-agent_sql = Agent(
-    nom="Agent sql",
-    instructions=(
-        "Tu reçois une question et un schéma. "
-        "Écris une requête SELECT puis exécute-la avec l'outil. "
-        "Corrige la requête en cas d'erreur. "
-        "Ne dis jamais qu'une table n'existe pas avant d'avoir exécuté "
-        "la requête avec l'outil.\n\n"
-
-        "IMPORTANT : trois bases SQLite sont disponibles :\n"
-        "- countries_db : table countries "
-        "(id, country, continent)\n"
-        "- economy_db : table economy "
-        "(id, country_id, population, pib)\n"
-        "- health_db : table health "
-        "(id, country_id, life_expectancy)\n\n"
-
-        "Pour accéder aux tables, utilise toujours leur nom avec "
-        "le nom de la base :\n"
-        "countries_db.countries\n"
-        "economy_db.economy\n"
-        "health_db.health\n\n"
-
-        "Pour joindre les tables, utilise country_id :\n"
-        "countries.id = economy.country_id\n"
-        "countries.id = health.country_id\n\n"
-
-        "Exemple :\n"
-        "SELECT c.country, e.pib "
-        "FROM countries_db.countries c "
-        "JOIN economy_db.economy e ON c.id = e.country_id "
-        "WHERE e.pib > 3000000;\n\n"
-
-        "Après l'exécution, résume les résultats sans rien inventer."
-    ),
-    outils=[
-        (executer_requete_sql, SCHEMA_EXECUTER_REQUETE),
-    ],
-)
-
-agent_database = Agent(
-    nom="Agent database",
-    instructions="Tu décris la structure de la base à partir de l'outil de schéma.",
-    outils=[(chercher_schema, SCHEMA_CHERCHER_SCHEMA)],
-)
-
-def creer_superviseur():
-    return Agent(
-        nom="Superviseur",
-        instructions=(
-            "Tu coordonnes une équipe d'agents. Tu ne réponds jamais de toi-même. "
-            "1) Demande le schéma à l'agent database. "
-            "2) Transmets la question de l'utilisateur ET le schéma obtenu à l'agent sql. "
-            "3) Renvoie la réponse de l'agent sql telle quelle, sans la reformuler."
-        ),
-        outils=[
-            agent_database.comme_outil(
-                "demander_agent_database",
-                "Renvoie les noms et types des colonnes de la base de données."),
-            agent_sql.comme_outil(
-                "demander_agent_sql",
-                "Transforme une question en requête SQL, à partir de la question et du schéma."),
-        ],
-        max_iterations=8,
-    )
+    def legende(self):
+        return f"Premier mot après {self.premier_mot:.1f} s · réponse complète en {self.total:.1f} s"

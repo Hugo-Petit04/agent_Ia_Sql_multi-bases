@@ -11,7 +11,7 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # pour importer common/
 from core import llm, traces
-from agent import ACTIONS_EN_ATTENTE, creer_superviseur, executer_action
+from project.outils import ACTIONS_EN_ATTENTE, creer_superviseur, executer_action
 
 PRIX_ENTREE, PRIX_SORTIE = 0.80, 4.00  # $ par million de tokens (indicatif, qwen3.8-27b chez Groq) : à adapter
 COULEURS = ["blue", "green", "orange", "violet", "red", "gray"]  # une couleur par agent
