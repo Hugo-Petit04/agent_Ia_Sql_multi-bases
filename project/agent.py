@@ -5,35 +5,25 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import openai
-import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # pour importer core/
 from core import llm, traces
-from core.llm import chat, lire_arguments, message_assistant, message_outil
 from outils import INSTRUCTIONS_SQL, SCHEMA_EXECUTER_REQUETE, executer_requete_sql
 
-AGENT = "Superviseur"
+AGENT = "Agent sql"
 MAX_ITERATIONS = 8
-
-PROMPT_SYSTEME = INSTRUCTIONS_SQL
 
 EXCUSE = "Désolé, je n'ai pas pu terminer : trop d'étapes nécessaires."
 
 
-def a_completer(texte):
-    """Le message jaune des autres labos, version page web."""
-    st.warning(f"**À compléter :** {texte}")
-    st.stop()
-
-
 def _messages(conversation, prompt):
     """Le prompt système + ce que la page a gardé (on ne garde que le rôle et le texte)."""
-    return [{"role": "system", "content": prompt or PROMPT_SYSTEME}] + [
+    return [{"role": "system", "content": prompt or INSTRUCTIONS_SQL}] + [
         {"role": m["role"], "content": m["content"]} for m in conversation]
 
 
 def _outils(outils, outils_en_plus):
-    """Des couples (fonction, schéma). outils=None : les outils du superviseur (les sous-agents)."""
+    """Des couples (fonction, schéma). outils=None : l'outil SQL par défaut."""
     if outils is None:
         outils = [(executer_requete_sql, SCHEMA_EXECUTER_REQUETE)]
     outils = list(outils) + list(outils_en_plus)
@@ -52,32 +42,18 @@ def _executer(nom, arguments, fonctions):
             resultat = f"Erreur pendant l'exécution de {nom} : {erreur}"
     if not isinstance(resultat, str):
         resultat = json.dumps(resultat, ensure_ascii=False)
-    traces.observation(AGENT, resultat)
+    traces.observation(AGENT, resultat, outil=nom)
     return resultat
-
-
-def repondre(conversation, outils_en_plus=(), prompt=None, outils=None):
-    """La boucle ReAct : rend la réponse finale quand elle est entièrement écrite."""
-    messages = _messages(conversation, prompt)
-    schemas, fonctions = _outils(outils, outils_en_plus)
-    for _ in range(MAX_ITERATIONS):
-        reponse = chat(messages, tools=schemas or None, agent=AGENT)
-        if not reponse.tool_calls:
-            return reponse.content or ""
-        messages.append(message_assistant(reponse))
-        for appel in reponse.tool_calls:
-            resultat = _executer(appel.function.name, lire_arguments(appel), fonctions)
-            messages.append(message_outil(appel, resultat))
-    return EXCUSE
 
 
 def repondre_en_direct(conversation, outils_en_plus=(), prompt=None, outils=None):
     """
-    La même boucle, avec stream=True : un générateur qui rend le texte morceau par morceau.
+    La boucle ReAct avec stream=True : un générateur qui rend le texte morceau par morceau.
     Si le fournisseur répond 429, on attend et on réessaie (comme llm.chat), tant qu'aucun texte n'a été affiché.
     """
     messages = _messages(conversation, prompt)
     schemas, fonctions = _outils(outils, outils_en_plus)
+    deja_ecrit = False                                # du texte a-t-il déjà été envoyé à la page ?
     for _ in range(MAX_ITERATIONS):
         for essai in range(len(llm.ATTENTES_429) + 1):
             debut = time.time()
@@ -85,20 +61,25 @@ def repondre_en_direct(conversation, outils_en_plus=(), prompt=None, outils=None
             try:
                 flux = llm.client().chat.completions.create(
                     model=llm.MODELE, messages=messages, tools=schemas or openai.NOT_GIVEN,
-                    temperature=0.3, stream=True)
+                    temperature=0.3, stream=True,
+                    stream_options={"include_usage": True})  # sinon Ollama n'envoie pas les tokens
                 for bloc in flux:
                     usage = _usage(bloc) or usage
                     if not bloc.choices:
                         continue
                     delta = bloc.choices[0].delta
                     if delta.content:
+                        if not texte and deja_ecrit:
+                            yield "\n\n"                # sépare du texte écrit avant un appel d'outil
                         texte += delta.content
+                        deja_ecrit = True
                         yield delta.content
                     for morceau in delta.tool_calls or []:
                         appel = appels.setdefault(morceau.index, {"id": "", "nom": "", "arguments": ""})
                         appel["id"] = morceau.id or appel["id"]
-                        appel["nom"] += morceau.function.name or ""
-                        appel["arguments"] += morceau.function.arguments or ""
+                        if morceau.function:
+                            appel["nom"] += morceau.function.name or ""
+                            appel["arguments"] += morceau.function.arguments or ""
                 break                                 # appel réussi : on sort de la boucle d'essais
             except openai.RateLimitError:
                 # si du texte est déjà affiché, réessayer le dupliquerait : on abandonne
@@ -109,7 +90,7 @@ def repondre_en_direct(conversation, outils_en_plus=(), prompt=None, outils=None
                 traces.tracer(AGENT, "INFO", f"Erreur 429 (trop de requêtes) : nouvelle tentative dans {attente} s...")
                 time.sleep(attente)
             except openai.OpenAIError as erreur:
-                raise llm.ErreurLLM(f"L'appel au modèle a échoué : {erreur}") from None
+                raise llm.erreur_lisible(erreur) from None
 
         if usage:
             llm._enregistrer_usage(SimpleNamespace(usage=usage), AGENT, time.time() - debut)
@@ -126,6 +107,7 @@ def repondre_en_direct(conversation, outils_en_plus=(), prompt=None, outils=None
             resultat = _executer(a["nom"], arguments if isinstance(arguments, dict) else {}, fonctions)
             messages.append({"role": "tool", "tool_call_id": a["id"], "name": a["nom"], "content": resultat})
     yield EXCUSE
+
 
 def _usage(bloc):
     """Les tokens d'un appel en streaming, s'ils sont dans ce bloc (champ usage, ou x_groq chez Groq)."""

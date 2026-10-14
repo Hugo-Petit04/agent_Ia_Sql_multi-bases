@@ -1,13 +1,17 @@
 import sqlite3
-import os
+from pathlib import Path
+
+DOSSIER = Path(__file__).resolve().parent   # fonctionne quel que soit le dossier courant
 
 #dbcountries
 
-connection = sqlite3.connect("database/countries.db")
+connection = sqlite3.connect(DOSSIER / "countries.db")
 cursor = connection.cursor()
 
+# On repart de zéro : relancer le script ne duplique pas les lignes
+cursor.execute("DROP TABLE IF EXISTS countries")
 cursor.execute("""
-CREATE TABLE IF NOT EXISTS countries (
+CREATE TABLE countries (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     country TEXT NOT NULL,
     continent TEXT
@@ -42,11 +46,12 @@ connection.close()
 
 #dbeconomy
 
-connection = sqlite3.connect("database/economy.db")
+connection = sqlite3.connect(DOSSIER / "economy.db")
 cursor = connection.cursor()
 
+cursor.execute("DROP TABLE IF EXISTS economy")
 cursor.execute("""
-CREATE TABLE IF NOT EXISTS economy (
+CREATE TABLE economy (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     country_id INTEGER NOT NULL,
     population INTEGER,
@@ -82,11 +87,12 @@ connection.close()
 
 #dbhealth
 
-connection = sqlite3.connect("database/health.db")
+connection = sqlite3.connect(DOSSIER / "health.db")
 cursor = connection.cursor()
 
+cursor.execute("DROP TABLE IF EXISTS health")
 cursor.execute("""
-CREATE TABLE IF NOT EXISTS health (
+CREATE TABLE health (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     country_id INTEGER NOT NULL,
     life_expectancy REAL
@@ -124,17 +130,9 @@ connection.close()
 connection = sqlite3.connect(":memory:")
 cursor = connection.cursor()
 
-cursor.execute("""
-ATTACH DATABASE 'database/countries.db' AS countries_db
-""")
-
-cursor.execute("""
-ATTACH DATABASE 'database/economy.db' AS economy_db
-""")
-
-cursor.execute("""
-ATTACH DATABASE 'database/health.db' AS health_db
-""")
+cursor.execute("ATTACH DATABASE ? AS countries_db", (str(DOSSIER / "countries.db"),))
+cursor.execute("ATTACH DATABASE ? AS economy_db", (str(DOSSIER / "economy.db"),))
+cursor.execute("ATTACH DATABASE ? AS health_db", (str(DOSSIER / "health.db"),))
 
 cursor.execute("""
 SELECT

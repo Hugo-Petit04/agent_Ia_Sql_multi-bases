@@ -1,6 +1,8 @@
-import sqlite3
 import json
+import sqlite3
+from pathlib import Path
 
+RACINE = Path(__file__).resolve().parent.parent   # fonctionne quel que soit le dossier courant
 
 DATABASES = [
     "database/countries.db",
@@ -13,7 +15,7 @@ def get_schema():
     schema = []
 
     for database in DATABASES:
-        connection = sqlite3.connect(database)
+        connection = sqlite3.connect(RACINE / database)
         cursor = connection.cursor()
 
         cursor.execute("""
@@ -26,7 +28,7 @@ def get_schema():
         tables = cursor.fetchall()
 
         for (table,) in tables:
-            cursor.execute(f"PRAGMA table_info({table})")
+            cursor.execute(f'PRAGMA table_info("{table}")')
             columns = cursor.fetchall()
 
             schema.append({
@@ -46,9 +48,8 @@ def get_schema():
     return schema
 
 
-schema = get_schema()
+if __name__ == "__main__":
+    with open(RACINE / "schema.json", "w", encoding="utf-8") as file:
+        json.dump(get_schema(), file, indent=4, ensure_ascii=False)
 
-with open("schema.json", "w", encoding="utf-8") as file:
-    json.dump(schema, file, indent=4, ensure_ascii=False)
-
-print("Schéma enregistré dans schema.json")
+    print("Schéma enregistré dans schema.json")
